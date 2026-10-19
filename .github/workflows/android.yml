@@ -1,0 +1,249 @@
+name: Android CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build, unit test, lint, and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Validate Gradle wrapper
+        run: |
+          test -x ./gradlew
+          ./gradlew --version --no-daemon
+
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
+
+      - name: Run Android Lint
+        run: ./gradlew :app:lintDebug --no-daemon --console=plain
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --console=plain
+
+      # Upload the installable product before building the test APK, so a later
+      # androidTest packaging failure cannot discard a successful debug build.
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagipoint-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --console=plain
+
+      - name: Verify APK size limits
+        run: |
+          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+          test -f "$DEBUG_APK"
+          test -f "$RELEASE_APK"
+          DEBUG_BYTES=$(stat -c %s "$DEBUG_APK")
+          RELEASE_BYTES=$(stat -c %s "$RELEASE_APK")
+          echo "Debug APK:   $DEBUG_APK ($DEBUG_BYTES bytes)"
+          echo "Release APK: $RELEASE_APK ($RELEASE_BYTES bytes)"
+          {
+            echo "### APK sizes"
+            echo ""
+            echo "| Artifact | Bytes | Limit |"
+            echo "| --- | ---: | ---: |"
+            echo "| app-debug.apk | $DEBUG_BYTES | 100000000 |"
+            echo "| app-release-unsigned.apk | $RELEASE_BYTES | 100000000 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$DEBUG_BYTES" -ge 100000000 ] || [ "$RELEASE_BYTES" -ge 100000000 ]; then
+            echo "::error::An APK exceeds the 100,000,000 byte limit."
+            exit 1
+          fi
+
+      - name: Verify release APK has no INTERNET permission
+        run: |
+          AAPT2="$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+          "$AAPT2" dump permissions "$RELEASE_APK" | tee release-permissions.txt
+          if grep -q "android.permission.INTERNET" release-permissions.txt; then
+            echo "::error::The release APK must not request INTERNET."
+            exit 1
+          fi
+
+      - name: Upload release APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagipoint-release-apk
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build instrumentation test APK
+        run: ./gradlew :app:assembleDebugAndroidTest --no-daemon --console=plain
+
+      - name: Upload instrumentation test APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagipoint-androidtest-apk
+          path: app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: |
+            app/build/reports/**
+            app/build/test-results/**
+            app/build/outputs/logs/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  emulator:
+    name: Wear OS 5 emulator smoke
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install emulator and Wear OS image
+        run: |
+          mkdir -p emulator-artifacts
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;35.0.0" \
+            "emulator" "system-images;android-34;android-wear;x86_64"
+
+      - name: Discover and verify Wear OS image and profile
+        run: |
+          mkdir -p emulator-artifacts
+          sdkmanager --list > emulator-artifacts/sdkmanager-list.txt
+          grep -Fq "system-images;android-34;android-wear;x86_64" \
+            emulator-artifacts/sdkmanager-list.txt
+          avdmanager list device > emulator-artifacts/device-profiles.txt
+          grep -Fq "wearos_large_round" emulator-artifacts/device-profiles.txt
+          echo "Verified API 34 Wear OS x86_64 image and wearos_large_round profile."
+
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          mkdir -p emulator-artifacts
+          ls -l /dev/kvm | tee emulator-artifacts/kvm.txt
+
+      - name: Check hardware-accelerated emulation
+        run: |
+          mkdir -p emulator-artifacts
+          "$ANDROID_HOME/emulator/emulator" -accel-check \
+            | tee emulator-artifacts/emulator-accel-check.txt
+
+      - name: Download debug APK
+        uses: actions/download-artifact@v4
+        with:
+          name: imagipoint-debug-apk
+          path: artifacts
+
+      - name: Download instrumentation test APK
+        uses: actions/download-artifact@v4
+        with:
+          name: imagipoint-androidtest-apk
+          path: artifacts
+
+      - name: Resolve manifest entry point and test package
+        run: |
+          AAPT2="$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          APP_ID="$("$AAPT2" dump badging artifacts/app-debug.apk \
+            | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n1)"
+          LAUNCH_ACTIVITY="$("$AAPT2" dump badging artifacts/app-debug.apk \
+            | sed -n "s/^launchable-activity: name='\([^']*\)'.*/\1/p" | head -n1)"
+          TEST_PACKAGE="$("$AAPT2" dump badging artifacts/app-debug-androidTest.apk \
+            | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n1)"
+          test -n "$APP_ID"
+          test -n "$LAUNCH_ACTIVITY"
+          test -n "$TEST_PACKAGE"
+          echo "APP_ID=$APP_ID" >> "$GITHUB_ENV"
+          echo "LAUNCH_ACTIVITY=$LAUNCH_ACTIVITY" >> "$GITHUB_ENV"
+          echo "TEST_PACKAGE=$TEST_PACKAGE" >> "$GITHUB_ENV"
+          echo "Resolved $APP_ID / $LAUNCH_ACTIVITY (tests: $TEST_PACKAGE)"
+
+      - name: Boot Wear OS emulator, test, and capture screenshots
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: 34
+          target: android-wear
+          arch: x86_64
+          profile: wearos_large_round
+          avd-name: imagipoint-wear
+          force-avd-creation: true
+          emulator-boot-timeout: 600
+          disable-animations: true
+          disable-spellchecker: true
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
+          emulator-options: >-
+            -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+            -no-snapshot -camera-back none -camera-front none
+          script: |
+            bash .github/scripts/emulator-smoke.sh \
+              artifacts/app-debug.apk \
+              artifacts/app-debug-androidTest.apk
+
+      - name: Upload emulator test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagipoint-emulator-artifacts
+          path: emulator-artifacts/
+          if-no-files-found: warn
+          retention-days: 14

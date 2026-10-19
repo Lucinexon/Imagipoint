@@ -1,0 +1,68 @@
+{
+  "project": "HGAG Watch Gesture Recognition",
+  "dataset": "Hand Gesture Accelerometer and Gyroscope Dataset (HGAG-DATA), version 3",
+  "dataset_doi": "10.17632/mkhn7kxjvy.3",
+  "dataset_license": "CC BY 4.0",
+  "selected_architecture": "dilated_residual_tcn",
+  "channels": [
+    "accel_x",
+    "accel_y",
+    "accel_z",
+    "gyro_x",
+    "gyro_y",
+    "gyro_z"
+  ],
+  "channel_order": [
+    "accel_x",
+    "accel_y",
+    "accel_z",
+    "gyro_x",
+    "gyro_y",
+    "gyro_z"
+  ],
+  "input_shape_per_window": [
+    200,
+    6
+  ],
+  "dataset_sampling_rate_hz": 200,
+  "window_offset_samples": 50,
+  "window_offset_ms_at_dataset_rate": 250,
+  "window_duration_ms_at_dataset_rate": 1000,
+  "normalization_embedded_in_model": true,
+  "normalization_mean_fit_on_training_subjects_only": [
+    4.395112409838475e-05,
+    4.64054983240203e-06,
+    -4.919684215565212e-05,
+    -7.469278443750227e-06,
+    8.821641586109763e-07,
+    2.3107013475964777e-06
+  ],
+  "normalization_std_fit_on_training_subjects_only": [
+    1.1521964073181152,
+    1.5132445096969604,
+    1.950215220451355,
+    0.41637107729911804,
+    0.13872158527374268,
+    0.09123071283102036
+  ],
+  "class_names_in_output_index_order": [
+    "Clapping",
+    "Coin Flipping",
+    "Finger Snapping",
+    "Fist Making",
+    "Horizontal Wrist Extension",
+    "Index Finger Flick",
+    "Index Thumb Tap",
+    "Shooting",
+    "Thumb Up",
+    "Wrist Extension",
+    "Wrist Flexion"
+  ],
+  "evaluation_split": "subject-independent grouped train/validation/test split",
+  "selected_model_test_accuracy": 0.8519480519480519,
+  "selected_model_test_macro_f1": 0.8499701028090207,
+  "selected_model_selection_rule": "macro-F1 within 0.005 of best validation score, then lowest measured Colab CPU TFLite p95 latency",
+  "tflite_input_contract": "one raw six-axis window shaped [1, 200, 6]; accel x/y/z then gyro x/y/z",
+  "sampling_rate_warning": "The model was trained on HGAG recordings at 200 Hz. Verify the Galaxy Watch 5 Pro event timestamps and sensor units. Resampling lower-rate watch data to 200 points does not recreate missing high-frequency signal information.",
+  "domain_gap_warning": "The research sensor and the watch sensor differ. The HGAG paper describes a 30\u201390 Hz bandpass. Validate using labelled data recorded on the target watch before relying on predictions."
+}

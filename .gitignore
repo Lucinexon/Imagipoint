@@ -1,0 +1,25 @@
+# Node / Playwright reference scaffolding
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+
+# Android / Gradle
+.gradle/
+build/
+app/build/
+captures/
+local.properties
+.idea/
+*.iml
+*.apk
+*.aab
+*.jks
+*.keystore
+.DS_Store
+
+# Keep the supplied reference APKs visible, but never ship generated ones from build/.
+!WowMouse/*.apk
+
+# Local emulator test output
+/emulator-artifacts/
